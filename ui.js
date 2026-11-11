@@ -43,6 +43,17 @@ function erstelleUi() {
   // --- Kopfzeile -------------------------------------------------------------
   ui.logo = platziere(createImg("assets/logo-jps.png", "Logo der Jakob-Preh-Schule"), 14, 3, 122, "logo");
 
+  platziere(createSpan("Beispiel"), 856, 15, 72);
+  ui.szenario = platziere(createSelect(), 928, 14, 330);
+  for (const schluessel of Object.keys(SZENARIEN)) {
+    ui.szenario.option(SZENARIEN[schluessel].name, schluessel);
+  }
+  ui.szenario.selected(szenario);
+  ui.szenario.changed(() => {
+    szenarioWechseln(ui.szenario.value());
+    ui.szenario.elt.blur();
+  });
+
   ui.neueDaten = platziere(createButton("Neue Messdaten"), 1270, 12, 150, "kopf");
   ui.neueDaten.mousePressed(neueMessdaten);
 
@@ -56,7 +67,7 @@ function erstelleUi() {
     karteSchluessel = "";
   });
 
-  ui.rezepte = platziere(createButton("Wahre Rezepturen zeigen"), 270, 830, 250);
+  ui.rezepte = platziere(createButton("Wahre Zustände zeigen"), 270, 830, 250);
   ui.rezepte.mousePressed(() => {
     rezepteAn = !rezepteAn;
   });
@@ -86,7 +97,7 @@ function erstelleUi() {
 
   platziere(createSpan("Startzentren"), 1104, 380, 104);
   ui.start = platziere(createSelect(), 1208, 380, 188);
-  ui.start.option("zufällige Schüsse", "zufall");
+  ui.start.option("zufällige Punkte", "zufall");
   ui.start.option("k-means++", "plusplus");
   ui.start.option("per Klick setzen", "klick");
   ui.start.selected(startArt);
@@ -178,11 +189,11 @@ function aktualisiereUi() {
   beschrifte(ui.gebiete, gebieteAn ? "Gebiete ausblenden" : "Gebiete einblenden");
   klasse(ui.gebiete, "kopf", true);
   klasse(ui.gebiete, "aktiv", gebieteAn);
-  beschrifte(ui.rezepte, rezepteAn ? "Wahre Rezepturen verbergen" : "Wahre Rezepturen zeigen");
+  beschrifte(ui.rezepte, rezepteAn ? `Wahre ${SZ.wort.gruppen} verbergen` : `Wahre ${SZ.wort.gruppen} zeigen`);
   klasse(ui.rezepte, "kopf", true);
   klasse(ui.rezepte, "aktiv", rezepteAn);
 
-  for (const el of [ui.k, ui.start, ui.normiert, ui.neueDaten, ui.ellbogen, ui.neu]) {
+  for (const el of [ui.szenario, ui.k, ui.start, ui.normiert, ui.neueDaten, ui.ellbogen, ui.neu]) {
     sperre(el, laufAuto);
   }
 }

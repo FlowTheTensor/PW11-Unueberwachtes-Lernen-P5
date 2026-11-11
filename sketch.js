@@ -1,11 +1,14 @@
 // =============================================================================
-//  KI-Prozessanalyse · Spritzguss
-//  k-Means findet ohne Beschriftung Gruppen (Cluster) in den Prozessdaten
-//  einer Spritzgießmaschine – nur anhand von Massetemperatur und Einspritzdruck.
+//  KI-Prozessanalyse · k-Means
+//  k-Means findet ohne Beschriftung Gruppen (Cluster) in Messdaten aus der
+//  Produktion – drei Beispiele zur Auswahl:
+//    - Förderband-Antrieb: Motorstrom und Schwingstärke → Betriebszustände
+//    - Pneumatikzylinder: Ausfahrzeit und Luftverbrauch → Fehlerzustände
+//    - Spritzgießmaschine: Massetemperatur und Einspritzdruck → Rezepturen
 // =============================================================================
 //
 //  Dateien
-//    daten.js   Prozessdaten (Schüsse) – die Rezepturen kennt k-Means nicht
+//    daten.js   Messdaten beider Beispiele – die wahren Gruppen kennt k-Means nicht
 //    kmeans.js  der Algorithmus (Zuordnen, Verschieben, Fehlersumme, k-means++)
 //    ui.js      Knöpfe, Auswahllisten, Kästchen
 //    sketch.js  Ablauf, Zeichnen, Erklärungen (diese Datei)
@@ -15,7 +18,7 @@
 //    Leertaste automatisch ablaufen lassen / anhalten
 //    R         neu starten
 //    Maus      Zentren verschieben · Punkt berühren: Abstände ansehen
-//    Klick     nach dem Konvergieren: neuen Schuss einordnen
+//    Klick     nach dem Konvergieren: neue Messung einordnen
 //
 //  Läuft mit p5.js 1.x und 2.x.
 //  Hinweis: Alle Schleifen haben geschweifte Klammern – der p5-Web-Editor
@@ -63,7 +66,7 @@ function ladeSchriften() {
   }
 }
 
-const P_DATEN = { x: 24, y: 84, w: 820, h: 800, titel: "Prozessdaten · Spritzgießmaschine 3" };
+const P_DATEN = { x: 24, y: 84, w: 820, h: 800, titel: "" };
 const P_ERKL = { x: 860, y: 84, w: 716, h: 244, titel: "" };
 const P_EINST = { x: 860, y: 344, w: 716, h: 132, titel: "Einstellungen" };
 const P_CLUSTER = { x: 860, y: 492, w: 716, h: 184, titel: "Gefundene Cluster" };
@@ -88,7 +91,7 @@ const FARBE = {
   akzent: [200, 30, 58],
   akzentHell: [228, 0, 43],
   senf: [184, 122, 28],
-  neutral: [160, 155, 146], // Schuss ohne Cluster
+  neutral: [160, 155, 146], // Messpunkt ohne Cluster
 };
 
 // Farben der Cluster C1 … C8
@@ -114,9 +117,10 @@ const TEMPO = {
 // -----------------------------------------------------------------------------
 // Zustand
 // -----------------------------------------------------------------------------
-let startwert = 20251111;
+let szenario = "motor"; // "motor", "pneumatik" oder "spritzguss" (siehe daten.js)
+let startwert = SZ.startwert;
 let daten = [];
-let zentren = []; // {t, p} in °C und bar
+let zentren = []; // {x, y} in echten Einheiten
 let wege = []; // bisherige Positionen jedes Zentrums
 let k = 4;
 let startArt = "zufall"; // zufall | plusplus | klick
@@ -135,13 +139,13 @@ let laufAuto = false;
 let letzterSchritt = 0;
 
 let gebieteAn = false;
-let rezepteAn = false;
+let rezepteAn = false; // wahre Gruppen (Zustände / Rezepturen) zeigen
 let wegeAn = true;
 let linienAn = false;
 
 let ziehen = -1; // Index des Zentrums, das gerade mit der Maus bewegt wird
-let neuerSchuss = null;
-let ellbogen = null; // {werte: [{k, sse}], normiert, startwert}
+let neuePunkt = null; // neu eingeordnete Messung
+let ellbogen = null; // {werte: [{k, sse}], normiert, startwert, szenario}
 
 let karteBild;
 let karteSchluessel = "";
@@ -161,6 +165,7 @@ function setup() {
   karteBild = createImage(KARTE_B, KARTE_H);
   karteBild.loadPixels();
 
+  setzeSzenario(szenario);
   daten = erzeugeMessdaten(startwert);
 
   erstelleUi();
@@ -227,6 +232,27 @@ function logik() {
 }
 
 // =============================================================================
+// Beispiel wechseln, Daten erzeugen
+// =============================================================================
+function szenarioWechseln(neu) {
+  if (laufAuto || neu === szenario) {
+    return;
+  }
+  szenario = neu;
+  setzeSzenario(neu);
+  startwert = SZ.startwert;
+  daten = erzeugeMessdaten(startwert);
+  ellbogen = null;
+  neuStarten();
+}
+
+function neueMessdaten() {
+  startwert = Math.floor(Math.random() * 1e9);
+  daten = erzeugeMessdaten(startwert);
+  neuStarten();
+}
+
+// =============================================================================
 // Ablauf von k-Means
 // =============================================================================
 function neuStarten() {
@@ -240,19 +266,13 @@ function neuStarten() {
   sseVerlauf = [];
   anim = null;
   ziehen = -1;
-  neuerSchuss = null;
+  neuePunkt = null;
   karteSchluessel = "";
   beispielIdx = Math.floor(Math.random() * daten.length);
   for (const b of daten) {
     b.cluster = -1;
     b.alt = -1;
   }
-}
-
-function neueMessdaten() {
-  startwert = Math.floor(Math.random() * 1e9);
-  daten = erzeugeMessdaten(startwert);
-  neuStarten();
 }
 
 // Zentren stehen fest → alles für einen neuen Durchlauf vorbereiten
@@ -262,8 +282,8 @@ function zentrenGesetzt() {
   wechsel = 0;
   sseVerlauf = [];
   leereCluster = [];
-  neuerSchuss = null;
-  wege = zentren.map((z) => [{ t: z.t, p: z.p }]);
+  neuePunkt = null;
+  wege = zentren.map((z) => [{ x: z.x, y: z.y }]);
   karteSchluessel = "";
 }
 
@@ -291,11 +311,11 @@ function zuordnenSchritt() {
 
 function verschiebenSchritt() {
   const ergebnis = mittelwerte(daten, zentren);
-  const von = zentren.map((z) => ({ t: z.t, p: z.p }));
+  const von = zentren.map((z) => ({ x: z.x, y: z.y }));
   zentren = ergebnis.neu;
   leereCluster = ergebnis.leer;
   for (let i = 0; i < zentren.length; i++) {
-    wege[i].push({ t: zentren[i].t, p: zentren[i].p });
+    wege[i].push({ x: zentren[i].x, y: zentren[i].y });
   }
   phase = "verschoben";
   anim = { art: "verschieben", t0: millis(), dauer: DAUER.verschieben * TEMPO[tempo].faktor, von, nach: ergebnis.neu };
@@ -306,7 +326,7 @@ function schritt() {
     return;
   }
   anim = null; // laufende Animation überspringen
-  neuerSchuss = null;
+  neuePunkt = null;
   letzterSchritt = millis();
   if (phase === "leer") {
     startzentrenWaehlen();
@@ -335,13 +355,13 @@ function autoUmschalten() {
 // Normierung umgeschaltet: Zentren bleiben, aber die Zuordnung muss neu berechnet werden
 function normierungGeaendert() {
   karteSchluessel = "";
-  neuerSchuss = null;
+  neuePunkt = null;
   if (phase !== "leer") {
     zentrenGesetzt();
     zeigeHinweis(
       normiert
         ? "Jetzt wird normiert gemessen. Gleiche Zentren – mit → neu zuordnen."
-        : "Jetzt wird in °C und bar gemessen. Gleiche Zentren – mit → neu zuordnen."
+        : `Jetzt wird in ${MERKMALE[0].einheit} und ${MERKMALE[1].einheit} gemessen. Gleiche Zentren – mit → neu zuordnen.`
     );
   }
 }
@@ -365,7 +385,7 @@ function animAnteil(art) {
 function zeigeZentrum(i) {
   if (anim && anim.art === "verschieben") {
     const a = weich(animAnteil("verschieben"));
-    return { t: lerp(anim.von[i].t, anim.nach[i].t, a), p: lerp(anim.von[i].p, anim.nach[i].p, a) };
+    return { x: lerp(anim.von[i].x, anim.nach[i].x, a), y: lerp(anim.von[i].y, anim.nach[i].y, a) };
   }
   return zentren[i];
 }
@@ -382,36 +402,37 @@ function ellbogenBerechnen() {
     }
     werte.push({ k: kk, sse: beste });
   }
-  ellbogen = { werte, normiert, startwert };
+  ellbogen = { werte, normiert, startwert, szenario };
 }
 
 // =============================================================================
 // Statistik der Cluster
 // =============================================================================
 function clusterStatistik() {
-  const st = zentren.map(() => ({ n: 0, t: 0, p: 0, d: 0, gruppen: GRUPPEN.map(() => 0) }));
+  const st = zentren.map(() => ({ n: 0, x: 0, y: 0, d: 0, gruppen: GRUPPEN.map(() => 0) }));
   for (const b of daten) {
     if (b.cluster >= 0 && b.cluster < st.length) {
       const s = st[b.cluster];
       s.n++;
-      s.t += b.t;
-      s.p += b.p;
+      s.x += b.x;
+      s.y += b.y;
       s.d += abstand(b, zentren[b.cluster], normiert);
       s.gruppen[b.gruppe]++;
     }
   }
   for (const s of st) {
     if (s.n > 0) {
-      s.t /= s.n;
-      s.p /= s.n;
+      s.x /= s.n;
+      s.y /= s.n;
       s.d /= s.n;
     }
   }
   return st;
 }
 
-function neuenSchussEinordnen(t, p) {
-  const b = { t, p };
+// neue Messung dem nächsten Zentrum zuordnen und auf Auffälligkeit prüfen
+function neuenPunktEinordnen(x, y) {
+  const b = { x, y };
   const st = clusterStatistik();
   const ds = zentren.map((z) => abstand(b, z, normiert));
   let c = 0;
@@ -421,7 +442,7 @@ function neuenSchussEinordnen(t, p) {
     }
   }
   const grenze = 3 * st[c].d;
-  neuerSchuss = { t, p, c, d: ds[c], ds, mittel: st[c].d, grenze, auffaellig: ds[c] > grenze };
+  neuePunkt = { x, y, c, d: ds[c], ds, mittel: st[c].d, grenze, auffaellig: ds[c] > grenze };
 }
 
 // =============================================================================
@@ -468,9 +489,14 @@ function clusterFarbe(c) {
   return c >= 0 ? CLUSTER_FARBE[c % CLUSTER_FARBE.length] : FARBE.neutral;
 }
 
+// beide Messwerte eines Punkts, z. B. "0.72 A · 1.6 mm/s"
+function punktWerte(b, trenner) {
+  return wertText(b.x, MERKMALE[0]) + (trenner || " · ") + wertText(b.y, MERKMALE[1]);
+}
+
 // Zahlen: Abstände und Fehlersummen je nach Normierung sinnvoll runden
 function fD(d) {
-  return normiert ? d.toFixed(3) : d.toFixed(1);
+  return normiert ? d.toFixed(3) : d.toFixed(SZ.dStellen);
 }
 
 function tausender(v) {
@@ -536,7 +562,7 @@ function zeichneKopf() {
   textFont(SCHRIFT);
   textSize(13);
   fill(...FARBE.blass);
-  text("Spritzguss · k-Means-Clustering · unüberwachtes Lernen", 194, 41);
+  text(SZ.untertitel, 194, 41);
 
   fill(...FARBE.grau);
   textSize(13);
@@ -545,9 +571,9 @@ function zeichneKopf() {
 }
 
 function statusText() {
-  const startName = { zufall: "zufällige Schüsse", plusplus: "k-means++", klick: "per Klick" }[startArt];
-  let s = `${daten.length} Schüsse ohne Label · k = ${k} · Startzentren: ${startName} · ${
-    normiert ? "normiert" : "nicht normiert (°C und bar)"
+  const startName = { zufall: "zufällige Punkte", plusplus: "k-means++", klick: "per Klick" }[startArt];
+  let s = `${daten.length} ${SZ.wort.mehrzahl} ohne Label · k = ${k} · Startzentren: ${startName} · ${
+    normiert ? "normiert" : `nicht normiert (${MERKMALE[0].einheit} und ${MERKMALE[1].einheit})`
   }`;
   if (iteration > 0) {
     s += ` · Iteration ${iteration} · Fehlersumme SSE = ${fSSE(sseVerlauf[sseVerlauf.length - 1].sse)}`;
@@ -559,23 +585,23 @@ function statusText() {
 }
 
 // =============================================================================
-// Prozessdaten
+// Messdaten
 // =============================================================================
-function zuPlot(t, p) {
-  const mt = MERKMALE[0];
-  const mp = MERKMALE[1];
+function zuPlot(x, y) {
+  const m1 = MERKMALE[0];
+  const m2 = MERKMALE[1];
   return [
-    PLOT.x + ((t - mt.min) / (mt.max - mt.min)) * PLOT.w,
-    PLOT.y + PLOT.h - ((p - mp.min) / (mp.max - mp.min)) * PLOT.h,
+    PLOT.x + ((x - m1.min) / (m1.max - m1.min)) * PLOT.w,
+    PLOT.y + PLOT.h - ((y - m2.min) / (m2.max - m2.min)) * PLOT.h,
   ];
 }
 
 function ausPlot(px, py) {
-  const mt = MERKMALE[0];
-  const mp = MERKMALE[1];
-  const t = mt.min + ((px - PLOT.x) / PLOT.w) * (mt.max - mt.min);
-  const p = mp.min + ((PLOT.y + PLOT.h - py) / PLOT.h) * (mp.max - mp.min);
-  return { t: constrain(t, mt.min, mt.max), p: constrain(p, mp.min, mp.max) };
+  const m1 = MERKMALE[0];
+  const m2 = MERKMALE[1];
+  const x = m1.min + ((px - PLOT.x) / PLOT.w) * (m1.max - m1.min);
+  const y = m2.min + ((PLOT.y + PLOT.h - py) / PLOT.h) * (m2.max - m2.min);
+  return { x: constrain(x, m1.min, m1.max), y: constrain(y, m2.min, m2.max) };
 }
 
 function imPlot(px, py) {
@@ -585,7 +611,7 @@ function imPlot(px, py) {
 function zentrumUnterMaus() {
   for (let i = zentren.length - 1; i >= 0; i--) {
     const z = zeigeZentrum(i);
-    const [zx, zy] = zuPlot(z.t, z.p);
+    const [zx, zy] = zuPlot(z.x, z.y);
     if (dist(mausX(), mausY(), zx, zy) < 18) {
       return i;
     }
@@ -602,7 +628,7 @@ function punktUnterMaus() {
   let bester = -1;
   let besterAbstand = 9;
   for (let i = 0; i < daten.length; i++) {
-    const [px, py] = zuPlot(daten[i].t, daten[i].p);
+    const [px, py] = zuPlot(daten[i].x, daten[i].y);
     const d = dist(mx, my, px, py);
     if (d < besterAbstand) {
       besterAbstand = d;
@@ -615,7 +641,7 @@ function punktUnterMaus() {
 // Gebietskarte: jedes Pixel bekommt die Farbe des nächstgelegenen Zentrums
 function berechneKarte() {
   const zs = zentren.map((z, i) => zeigeZentrum(i));
-  const schluessel = JSON.stringify(zs.map((z) => [z.t.toFixed(2), z.p.toFixed(1)])) + normiert;
+  const schluessel = JSON.stringify(zs.map((z) => [z.x.toFixed(4), z.y.toFixed(4)])) + normiert + szenario;
   if (schluessel === karteSchluessel) {
     return;
   }
@@ -705,7 +731,12 @@ function zeichneStern(x, y, r) {
   endShape(CLOSE);
 }
 
+function achsenText(m) {
+  return `${m.name} ${m.kurz} in ${m.einheit}`;
+}
+
 function zeichneDatenPanel() {
+  P_DATEN.titel = SZ.titel;
   panel(P_DATEN);
   zeichneLegende();
 
@@ -720,37 +751,42 @@ function zeichneDatenPanel() {
   }
 
   // Gitter und Achsen
+  const [m1, m2] = MERKMALE;
   textFont(SCHRIFT);
   textSize(12);
-  for (let t = 180; t <= 300; t += 20) {
-    const [gx] = zuPlot(t, 500);
+  const anzX = Math.round((m1.max - m1.min) / m1.gitter);
+  for (let i = 0; i <= anzX; i++) {
+    const v = m1.min + i * m1.gitter;
+    const [gx] = zuPlot(v, m2.min);
     stroke(0, 0, 0, 25);
     strokeWeight(1);
     line(gx, PLOT.y, gx, PLOT.y + PLOT.h);
     noStroke();
     fill(...FARBE.grau);
     textAlign(CENTER, TOP);
-    text(t, gx, PLOT.y + PLOT.h + 6);
+    text(v.toFixed(m1.gitter < 1 ? 1 : 0), gx, PLOT.y + PLOT.h + 6);
   }
-  for (let p = 500; p <= 1500; p += 100) {
-    const [, gy] = zuPlot(180, p);
+  const anzY = Math.round((m2.max - m2.min) / m2.gitter);
+  for (let i = 0; i <= anzY; i++) {
+    const v = m2.min + i * m2.gitter;
+    const [, gy] = zuPlot(m1.min, v);
     stroke(0, 0, 0, 25);
     line(PLOT.x, gy, PLOT.x + PLOT.w, gy);
     noStroke();
     fill(...FARBE.grau);
     textAlign(RIGHT, CENTER);
-    text(p, PLOT.x - 6, gy);
+    text(v.toFixed(m2.gitter < 1 ? 1 : 0), PLOT.x - 6, gy);
   }
   fill(...FARBE.text);
   textStyle(BOLD);
   textSize(13);
   textAlign(CENTER, TOP);
-  text("Massetemperatur T in °C", PLOT.x + PLOT.w / 2, PLOT.y + PLOT.h + 26);
+  text(achsenText(m1), PLOT.x + PLOT.w / 2, PLOT.y + PLOT.h + 26);
   push();
   translate(P_DATEN.x + 18, PLOT.y + PLOT.h / 2);
   rotate(-HALF_PI);
   textAlign(CENTER, TOP);
-  text("Einspritzdruck p in bar", 0, 0);
+  text(achsenText(m2), 0, 0);
   pop();
   textStyle(NORMAL);
 
@@ -766,16 +802,16 @@ function zeichneDatenPanel() {
       strokeWeight(2);
       beginShape();
       for (const w of wege[i]) {
-        const [x, y] = zuPlot(w.t, w.p);
+        const [x, y] = zuPlot(w.x, w.y);
         vertex(x, y);
       }
-      const [zx, zy] = zuPlot(zs[i].t, zs[i].p);
+      const [zx, zy] = zuPlot(zs[i].x, zs[i].y);
       vertex(zx, zy);
       endShape();
       noStroke();
       fill(f[0], f[1], f[2], 170);
       for (const w of wege[i]) {
-        const [x, y] = zuPlot(w.t, w.p);
+        const [x, y] = zuPlot(w.x, w.y);
         circle(x, y, 6);
       }
     }
@@ -787,8 +823,8 @@ function zeichneDatenPanel() {
       if (b.cluster < 0) {
         continue;
       }
-      const [px, py] = zuPlot(b.t, b.p);
-      const [zx, zy] = zuPlot(zs[b.cluster].t, zs[b.cluster].p);
+      const [px, py] = zuPlot(b.x, b.y);
+      const [zx, zy] = zuPlot(zs[b.cluster].x, zs[b.cluster].y);
       const f = clusterFarbe(b.cluster);
       let alpha = 70;
       let ende = 1;
@@ -802,9 +838,9 @@ function zeichneDatenPanel() {
     }
   }
 
-  // Schüsse
+  // Messpunkte
   for (const b of daten) {
-    const [px, py] = zuPlot(b.t, b.p);
+    const [px, py] = zuPlot(b.x, b.y);
     let f = clusterFarbe(b.cluster);
     if (anim && anim.art === "zuordnen" && b.alt !== b.cluster) {
       const f0 = clusterFarbe(b.alt);
@@ -814,14 +850,14 @@ function zeichneDatenPanel() {
     zeichneForm(px, py, form, 5.5, f, b.cluster >= 0 ? 235 : 190);
   }
 
-  // Beispielschuss bzw. Schuss unter der Maus: Abstände zu allen Zentren
+  // Beispielpunkt bzw. Punkt unter der Maus: Abstände zu allen Zentren
   const hover = ziehen < 0 ? punktUnterMaus() : -1;
   const zeigeBeispiel = phase === "start" || phase === "zugeordnet";
   const idx = hover >= 0 ? hover : zeigeBeispiel && !laufAuto ? beispielIdx : -1;
   if (idx >= 0 && zentren.length > 0) {
     zeichneAbstaende(daten[idx], zs, hover >= 0 ? "" : "Beispiel");
   } else if (hover >= 0) {
-    const [px, py] = zuPlot(daten[hover].t, daten[hover].p);
+    const [px, py] = zuPlot(daten[hover].x, daten[hover].y);
     noFill();
     stroke(...FARBE.text);
     strokeWeight(2);
@@ -830,16 +866,16 @@ function zeichneDatenPanel() {
 
   // Zentren
   for (let i = 0; i < zs.length; i++) {
-    const [zx, zy] = zuPlot(zs[i].t, zs[i].p);
+    const [zx, zy] = zuPlot(zs[i].x, zs[i].y);
     zeichneZentrum(zx, zy, clusterFarbe(i), i + 1, i === ziehen);
   }
 
-  // neuer Schuss
-  if (neuerSchuss) {
-    const [nx, ny] = zuPlot(neuerSchuss.t, neuerSchuss.p);
-    const z = zs[neuerSchuss.c];
-    const [zx, zy] = zuPlot(z.t, z.p);
-    const f = clusterFarbe(neuerSchuss.c);
+  // neue Messung
+  if (neuePunkt) {
+    const [nx, ny] = zuPlot(neuePunkt.x, neuePunkt.y);
+    const z = zs[neuePunkt.c];
+    const [zx, zy] = zuPlot(z.x, z.y);
+    const f = clusterFarbe(neuePunkt.c);
     stroke(...f);
     strokeWeight(2.5);
     drawingContext.setLineDash([6, 5]);
@@ -847,7 +883,7 @@ function zeichneDatenPanel() {
     drawingContext.setLineDash([]);
     stroke(255);
     strokeWeight(2);
-    fill(...(neuerSchuss.auffaellig ? FARBE.akzentHell : FARBE.text));
+    fill(...(neuePunkt.auffaellig ? FARBE.akzentHell : FARBE.text));
     zeichneStern(nx, ny, 14);
     noStroke();
     fill(...FARBE.text);
@@ -856,7 +892,7 @@ function zeichneDatenPanel() {
     textSize(13);
     const rechts = nx < PLOT.x + PLOT.w - 200;
     textAlign(rechts ? LEFT : RIGHT, CENTER);
-    text(neuerSchuss.auffaellig ? "neuer Schuss · auffällig!" : "neuer Schuss", rechts ? nx + 16 : nx - 16, ny + 16);
+    text(neuePunkt.auffaellig ? SZ.wort.neuer + " · auffällig!" : SZ.wort.neuer, rechts ? nx + 16 : nx - 16, ny + 16);
     textStyle(NORMAL);
   }
 
@@ -869,7 +905,7 @@ function zeichneDatenPanel() {
   textSize(12);
   textAlign(LEFT, CENTER);
   text("Maus auf Punkt: Abstände · Zentren ziehen", 540, 838);
-  text("Wenn fertig: Klick ordnet neuen Schuss ein", 540, 856);
+  text(`Wenn fertig: Klick ordnet ${SZ.wort.einenNeuen} ein`, 540, 856);
 
   // Mauszeiger
   if (ziehen >= 0 || (zentrumUnterMaus() >= 0 && !laufAuto)) {
@@ -881,40 +917,47 @@ function zeichneDatenPanel() {
   }
 }
 
+// Legende rechts in der Überschrift des Datenfelds
 function zeichneLegende() {
   textFont(SCHRIFT);
   textSize(12);
   textAlign(LEFT, CENTER);
   const y = P_DATEN.y + 17;
+  const rechterRand = P_DATEN.x + P_DATEN.w - 16;
   if (rezepteAn) {
-    let x = P_DATEN.x + P_DATEN.w - 380;
+    let breite = 0;
+    for (const g of GRUPPEN) {
+      breite += textWidth(g.kurz) + 30;
+    }
+    let x = rechterRand - breite + 8;
     for (const g of GRUPPEN) {
       zeichneForm(x, y, g.form, 5.5, FARBE.grau, 255);
       noStroke();
       fill(...FARBE.text);
       text(g.kurz, x + 11, y + 1);
-      x += textWidth(g.kurz) + 32;
+      x += textWidth(g.kurz) + 30;
     }
   } else {
-    const x = P_DATEN.x + P_DATEN.w - 300;
+    const x = rechterRand - 290;
     zeichneForm(x, y, "kreis", 5.5, FARBE.neutral, 255);
     noStroke();
     fill(...FARBE.text);
-    text("Schuss (ohne Label)", x + 11, y + 1);
+    text(`${SZ.wort.einzahl} (ohne Label)`, x + 11, y + 1);
+    const x2 = rechterRand - 112;
     stroke(...FARBE.text);
     strokeWeight(2.5);
     noFill();
-    circle(x + 160, y, 15);
-    line(x + 156, y, x + 164, y);
-    line(x + 160, y - 4, x + 160, y + 4);
+    circle(x2, y, 15);
+    line(x2 - 4, y, x2 + 4, y);
+    line(x2, y - 4, x2, y + 4);
     noStroke();
     fill(...FARBE.text);
-    text("Cluster-Zentrum", x + 172, y + 1);
+    text("Cluster-Zentrum", x2 + 12, y + 1);
   }
 }
 
 function zeichneAbstaende(b, zs, label) {
-  const [px, py] = zuPlot(b.t, b.p);
+  const [px, py] = zuPlot(b.x, b.y);
   const ds = zs.map((z) => abstand(b, z, normiert));
   let best = 0;
   for (let i = 1; i < ds.length; i++) {
@@ -923,7 +966,7 @@ function zeichneAbstaende(b, zs, label) {
     }
   }
   for (let i = 0; i < zs.length; i++) {
-    const [zx, zy] = zuPlot(zs[i].t, zs[i].p);
+    const [zx, zy] = zuPlot(zs[i].x, zs[i].y);
     stroke(...(i === best ? FARBE.text : FARBE.blass));
     strokeWeight(i === best ? 2 : 1.2);
     drawingContext.setLineDash([5, 5]);
@@ -931,7 +974,7 @@ function zeichneAbstaende(b, zs, label) {
     drawingContext.setLineDash([]);
   }
   for (let i = 0; i < zs.length; i++) {
-    const [zx, zy] = zuPlot(zs[i].t, zs[i].p);
+    const [zx, zy] = zuPlot(zs[i].x, zs[i].y);
     const mx = lerp(px, zx, 0.5);
     const my = lerp(py, zy, 0.5);
     const s = fD(ds[i]);
@@ -971,7 +1014,7 @@ function zeichnePlotBanner() {
     s =
       startArt === "klick"
         ? `Klicke noch ${k - zentren.length} Startzentren ins Diagramm`
-        : "Die Schüsse haben keine Beschriftung · mit → Startzentren wählen";
+        : `Die ${SZ.wort.mehrzahl} haben keine Beschriftung · mit → Startzentren wählen`;
   }
   if (!s) {
     return;
@@ -997,14 +1040,22 @@ function beispiel() {
   return daten[h >= 0 ? h : beispielIdx];
 }
 
+function zahl(v) {
+  return Number(v.toFixed(4)).toString();
+}
+
 function abstandsFormel() {
+  const [m1, m2] = MERKMALE;
+  const a = m1.kurz;
+  const b = m2.kurz;
   if (normiert) {
     return [
-      "d = √( (T′ − T′c)² + (p′ − p′c)² )",
-      "mit  T′ = (T − 180 °C) / 120 °C   und   p′ = (p − 500 bar) / 1000 bar",
+      `d = √( (${a}′ − ${a}′c)² + (${b}′ − ${b}′c)² )`,
+      `mit  ${a}′ = (${a} − ${zahl(m1.min)} ${m1.einheit}) / ${zahl(m1.max - m1.min)} ${m1.einheit}` +
+        `   und   ${b}′ = (${b} − ${zahl(m2.min)} ${m2.einheit}) / ${zahl(m2.max - m2.min)} ${m2.einheit}`,
     ];
   }
-  return ["d = √( (T − Tc)² + (p − pc)² )   ⚠ °C und bar werden gemischt!"];
+  return [`d = √( (${a} − ${a}c)² + (${b} − ${b}c)² )   ⚠ ${m1.einheit} und ${m2.einheit} werden gemischt!`];
 }
 
 function abstandsZeilen(b) {
@@ -1016,7 +1067,7 @@ function abstandsZeilen(b) {
       best = i;
     }
   }
-  const zeilen = [`Schuss ${b.id} (${b.t} °C · ${b.p} bar):`];
+  const zeilen = [`${SZ.wort.einzahl} ${b.id} (${punktWerte(b)}):`];
   let akt = "";
   for (let i = 0; i < ds.length; i++) {
     akt += (`d(C${i + 1}) = ${fD(ds[i])}` + (i === best ? " ←" : "")).padEnd(20, " ");
@@ -1030,41 +1081,44 @@ function abstandsZeilen(b) {
 
 function erklaerung() {
   const n = daten.length;
-  if (neuerSchuss) {
-    const ns = neuerSchuss;
-    const c = "C" + (ns.c + 1);
+  const wt = SZ.wort;
+  const [m1, m2] = MERKMALE;
+
+  if (neuePunkt) {
+    const np = neuePunkt;
+    const c = "C" + (np.c + 1);
     return {
-      titel: "Neuen Schuss einordnen",
+      titel: wt.titelNeu,
       text:
-        `Ein neuer Schuss mit ${ns.t} °C und ${ns.p} bar wird dem nächsten Zentrum ${c} zugeordnet. ` +
-        (ns.auffaellig
-          ? "Er liegt aber viel weiter weg als die übrigen Schüsse dieses Clusters – auffällig! So kann k-Means auch Störungen im Prozess melden (Anomalieerkennung)."
-          : "Sein Abstand ist ähnlich wie bei den anderen Schüssen dieses Clusters – ein ganz normaler Schuss dieser Gruppe."),
+        `${wt.einNeuer} mit ${punktWerte(np, " und ")} wird dem nächsten Zentrum ${c} zugeordnet. ` +
+        (np.auffaellig
+          ? `${wt.er} liegt aber viel weiter weg als die übrigen ${wt.mehrzahl} dieses Clusters – auffällig! ${wt.anomalie}`
+          : `${wt.sein} Abstand ist ähnlich wie bei den anderen ${wt.mehrzahlDativ} dieses Clusters – ganz normal für diese Gruppe.`),
       formeln: [
-        `Abstand zu ${c}: d = ${fD(ns.d)}`,
-        `Ø Abstand der Schüsse in ${c}: ${fD(ns.mittel)}  →  Grenze 3 × ${fD(ns.mittel)} = ${fD(ns.grenze)}`,
-        `${fD(ns.d)} ${ns.auffaellig ? ">" : "≤"} ${fD(ns.grenze)}  →  ${ns.auffaellig ? "auffällig" : "unauffällig"}`,
+        `Abstand zu ${c}: d = ${fD(np.d)}`,
+        `Ø Abstand der ${wt.mehrzahl} in ${c}: ${fD(np.mittel)}  →  Grenze 3 × ${fD(np.mittel)} = ${fD(np.grenze)}`,
+        `${fD(np.d)} ${np.auffaellig ? ">" : "≤"} ${fD(np.grenze)}  →  ${np.auffaellig ? "auffällig" : "unauffällig"}`,
       ],
     };
   }
 
   if (phase === "leer") {
-    let t = `Die ${n} Schüsse haben keine Beschriftung: Niemand hat notiert, welcher Artikel gerade lief. k-Means soll k = ${k} Gruppen ähnlicher Schüsse finden. `;
+    let t = `Die ${n} ${wt.mehrzahl} haben keine Beschriftung: Niemand hat notiert, ${wt.unbekannt}. k-Means soll k = ${k} Gruppen ähnlicher ${wt.mehrzahl} finden. `;
     if (startArt === "klick") {
       t += `Klicke dazu ${k - zentren.length} Startzentren ins Diagramm.`;
     } else if (startArt === "plusplus") {
-      t += "k-means++: Das erste Startzentrum ist ein zufälliger Schuss, jedes weitere wird bevorzugt weit weg von den bisherigen gewählt.";
+      t += "k-means++: Das erste Startzentrum ist ein zufälliger Punkt, jedes weitere wird bevorzugt weit weg von den bisherigen gewählt.";
     } else {
-      t += `Mit → werden ${k} zufällige Schüsse als Startzentren genommen.`;
+      t += `Mit → werden ${k} zufällige ${wt.mehrzahl} als Startzentren genommen.`;
     }
     return {
       titel: "① Startzentren wählen",
       text: t,
       formeln: [
         "① k Startzentren wählen",
-        "② Zuordnen:    jeder Schuss kommt zum nächstgelegenen Zentrum",
-        "③ Verschieben: jedes Zentrum wandert in die Mitte seiner Schüsse",
-        "②③ wiederholen, bis kein Schuss mehr das Cluster wechselt",
+        `② Zuordnen:    ${wt.jeder} ${wt.einzahl} kommt zum nächstgelegenen Zentrum`,
+        `③ Verschieben: jedes Zentrum wandert in die Mitte seiner ${wt.mehrzahl}`,
+        `②③ wiederholen, bis ${wt.kein} ${wt.einzahl} mehr das Cluster wechselt`,
       ],
     };
   }
@@ -1072,7 +1126,7 @@ function erklaerung() {
   if (phase === "start") {
     return {
       titel: "Startzentren gewählt · als Nächstes ② Zuordnen",
-      text: `Die Zentren C1 … C${k} stehen fest. Für jeden Schuss wird jetzt der Abstand zu jedem Zentrum berechnet – er kommt zum nächstgelegenen. Fahre mit der Maus über einen Punkt, um seine Abstände zu sehen.`,
+      text: `Die Zentren C1 … C${k} stehen fest. Für ${wt.jedenAkk} ${wt.einzahl} wird jetzt der Abstand zu jedem Zentrum berechnet – ${wt.erKlein} kommt zum nächstgelegenen. Fahre mit der Maus über einen Punkt, um seine Abstände zu sehen.`,
       formeln: abstandsFormel().concat(abstandsZeilen(beispiel())),
     };
   }
@@ -1081,10 +1135,12 @@ function erklaerung() {
 
   if (phase === "zugeordnet") {
     const wechselText =
-      iteration > 1 ? ` ${wechsel} ${wechsel === 1 ? "Schuss hat" : "Schüsse haben"} dabei das Cluster gewechselt.` : "";
+      iteration > 1
+        ? ` ${wechsel} ${wechsel === 1 ? wt.einzahl + " hat" : wt.mehrzahl + " haben"} dabei das Cluster gewechselt.`
+        : "";
     return {
       titel: `② Zuordnen · Iteration ${iteration}`,
-      text: `Jeder Schuss gehört jetzt zum nächstgelegenen Zentrum und hat dessen Farbe.${wechselText} Als Nächstes wandert jedes Zentrum in die Mitte seiner Schüsse.`,
+      text: `${wt.jeder.charAt(0).toUpperCase() + wt.jeder.slice(1)} ${wt.einzahl} gehört jetzt zum nächstgelegenen Zentrum und hat dessen Farbe.${wechselText} Als Nächstes wandert jedes Zentrum in die Mitte seiner ${wt.mehrzahl}.`,
       formeln: abstandsZeilen(beispiel()).concat([`Fehlersumme  SSE = Σ d² = ${fSSE(sse)}`]),
     };
   }
@@ -1092,15 +1148,18 @@ function erklaerung() {
   if (phase === "verschoben") {
     const b = beispiel();
     const c = b.cluster >= 0 ? b.cluster : 0;
-    const glieder = daten.filter((x) => x.cluster === c);
-    const formeln = [`Zentrum = Mittelwert aller Schüsse im Cluster`];
+    const glieder = daten.filter((q) => q.cluster === c);
+    const formeln = [`Zentrum = Mittelwert aller ${wt.mehrzahl} im Cluster`];
     if (glieder.length >= 2) {
       const z = zentren[c];
+      const vorne = `C${c + 1}: ${glieder.length} ${wt.mehrzahl}  →  `;
+      const st1 = m1.stellen + 1;
+      const st2 = m2.stellen + 1;
       formeln.push(
-        `C${c + 1}: ${glieder.length} Schüsse  →  Tc = (${glieder[0].t} + ${glieder[1].t} + …) / ${glieder.length} = ${z.t.toFixed(1)} °C`
+        `${vorne}${m1.kurz}c = (${glieder[0].x.toFixed(m1.stellen)} + ${glieder[1].x.toFixed(m1.stellen)} + …) / ${glieder.length} = ${z.x.toFixed(st1)} ${m1.einheit}`
       );
       formeln.push(
-        `${" ".repeat(String(glieder.length).length + 17)}pc = (${glieder[0].p} + ${glieder[1].p} + …) / ${glieder.length} = ${z.p.toFixed(0)} bar`
+        `${" ".repeat(vorne.length)}${m2.kurz}c = (${glieder[0].y.toFixed(m2.stellen)} + ${glieder[1].y.toFixed(m2.stellen)} + …) / ${glieder.length} = ${z.y.toFixed(st2)} ${m2.einheit}`
       );
     }
     if (leereCluster.length > 0) {
@@ -1108,7 +1167,7 @@ function erklaerung() {
     }
     return {
       titel: `③ Zentren verschieben · Iteration ${iteration}`,
-      text: "Jedes Zentrum steht jetzt im Mittelwert seiner Schüsse. Weil sich die Zentren bewegt haben, liegt mancher Schuss jetzt näher an einem anderen Zentrum – also wird wieder zugeordnet.",
+      text: `Jedes Zentrum steht jetzt im Mittelwert seiner ${wt.mehrzahl}. Weil sich die Zentren bewegt haben, liegt ${wt.mancher} ${wt.einzahl} jetzt näher an einem anderen Zentrum – also wird wieder zugeordnet.`,
       formeln,
     };
   }
@@ -1116,10 +1175,10 @@ function erklaerung() {
   // fertig
   return {
     titel: `Fertig · konvergiert nach ${iteration} Iterationen`,
-    text: "Beim letzten Zuordnen hat kein Schuss mehr das Cluster gewechselt, die Zentren bleiben stehen. Passen die Cluster zu den Rezepturen? Mit „Neu starten“ und anderen Startzentren kann ein anderes Ergebnis herauskommen.",
+    text: `Beim letzten Zuordnen hat ${wt.kein} ${wt.einzahl} mehr das Cluster gewechselt, die Zentren bleiben stehen. Passen die Cluster zu den echten ${wt.gruppenDativ}? Mit „Neu starten“ und anderen Startzentren kann ein anderes Ergebnis herauskommen.`,
     formeln: [
       `Fehlersumme  SSE = Σ d² = ${fSSE(sse)}`,
-      "Klick ins Diagramm: einen neuen Schuss einordnen",
+      `Klick ins Diagramm: ${wt.einenNeuen} einordnen`,
       "Wie viele Cluster passen am besten? → Ellenbogen-Methode",
     ],
   };
@@ -1169,6 +1228,11 @@ function zeichneErklaerung() {
 function zeichneEinstellungen() {
   const p = P_EINST;
   panel(p);
+  const [m1, m2] = MERKMALE;
+  const b1 = m1.max - m1.min;
+  const b2 = m2.max - m2.min;
+  const gross = b1 >= b2 ? m1 : m2;
+  const klein = b1 >= b2 ? m2 : m1;
   noStroke();
   fill(...FARBE.blass);
   textFont(SCHRIFT);
@@ -1176,8 +1240,8 @@ function zeichneEinstellungen() {
   textAlign(LEFT, TOP);
   text(
     normiert
-      ? "Normiert: Temperatur und Druck zählen gleich stark, egal in welcher Einheit."
-      : "Nicht normiert: Der Druck (Bereich 1000 bar) überwiegt die Temperatur (Bereich 120 °C).",
+      ? `Normiert: ${m1.name} und ${m2.name} zählen gleich stark, egal in welcher Einheit.`
+      : `Nicht normiert: ${gross.name} (Bereich ${zahl(gross.max - gross.min)} ${gross.einheit}) überwiegt ${klein.name} (Bereich ${zahl(klein.max - klein.min)} ${klein.einheit}).`,
     p.x + 16,
     p.y + p.h - 22
   );
@@ -1200,15 +1264,23 @@ function zeichneClusterPanel() {
     return;
   }
 
+  const [m1, m2] = MERKMALE;
   const st = clusterStatistik();
-  const sp = [p.x + 18, p.x + 100, p.x + 180, p.x + 290, p.x + 390, p.x + 490];
+  const sp = [p.x + 18, p.x + 96, p.x + 188, p.x + 326, p.x + 450, p.x + 536];
   let y = p.y + KOPF_H + 14;
   textSize(12);
   textStyle(BOLD);
   fill(...FARBE.blass);
   noStroke();
   textAlign(LEFT, CENTER);
-  const kopf = ["Cluster", "Schüsse", "Ø Temperatur", "Ø Druck", "Ø Abstand", rezepteAn ? "wahre Rezepturen darin" : "(Rezepturen verborgen)"];
+  const kopf = [
+    "Cluster",
+    SZ.wort.mehrzahl,
+    "Ø " + m1.name,
+    "Ø " + m2.name,
+    "Ø Abstand",
+    rezepteAn ? `wahre ${SZ.wort.gruppen} darin` : `(${SZ.wort.gruppen} verborgen)`,
+  ];
   for (let i = 0; i < kopf.length; i++) {
     text(kopf[i], sp[i], y);
   }
@@ -1228,16 +1300,16 @@ function zeichneClusterPanel() {
     textStyle(NORMAL);
     textFont(MONO);
     text(String(s.n), sp[1], y);
-    text(s.n > 0 ? s.t.toFixed(1) + " °C" : "–", sp[2], y);
-    text(s.n > 0 ? s.p.toFixed(0) + " bar" : "–", sp[3], y);
+    text(s.n > 0 ? s.x.toFixed(m1.stellen + 1) + " " + m1.einheit : "–", sp[2], y);
+    text(s.n > 0 ? s.y.toFixed(m2.stellen + 1) + " " + m2.einheit : "–", sp[3], y);
     text(s.n > 0 ? fD(s.d) : "–", sp[4], y);
     if (rezepteAn && s.n > 0) {
       const teile = s.gruppen
         .map((anz, g) => ({ anz, g }))
-        .filter((x) => x.anz > 0)
+        .filter((q) => q.anz > 0)
         .sort((a, b) => b.anz - a.anz)
         .slice(0, 3)
-        .map((x) => `${GRUPPEN[x.g].kurz} ${x.anz}`);
+        .map((q) => `${GRUPPEN[q.g].kurz} ${q.anz}`);
       textFont(SCHRIFT);
       text(teile.join(" · "), sp[5], y);
     }
@@ -1246,7 +1318,7 @@ function zeichneClusterPanel() {
 }
 
 // =============================================================================
-// Fehlersumme je Iteration
+// Fehlersumme je Iteration und Ellenbogen-Methode
 // =============================================================================
 function zeichneLinienDiagramm(p, punkte, xName, markiertX, blass) {
   const gx = p.x + 66;
@@ -1318,7 +1390,11 @@ function zeichneKurvenPanel() {
     textFont(SCHRIFT);
     textSize(13);
     textAlign(CENTER, CENTER);
-    text("Noch keine Iteration.\nDie Fehlersumme zeigt, wie eng\ndie Schüsse um ihre Zentren liegen.", p.x + p.w / 2, p.y + KOPF_H + (p.h - KOPF_H) / 2);
+    text(
+      `Noch keine Iteration.\nDie Fehlersumme zeigt, wie eng\ndie ${SZ.wort.mehrzahl} um ihre Zentren liegen.`,
+      p.x + p.w / 2,
+      p.y + KOPF_H + (p.h - KOPF_H) / 2
+    );
     return;
   }
   zeichneLinienDiagramm(
@@ -1339,10 +1415,14 @@ function zeichneEllbogenPanel() {
     textFont(SCHRIFT);
     textSize(13);
     textAlign(CENTER, CENTER);
-    text("Wie viele Cluster sind sinnvoll?\nFür k = 1 … 8 wird k-Means je 10-mal\ngerechnet – die beste Fehlersumme zählt.", p.x + p.w / 2, p.y + KOPF_H + (p.h - KOPF_H) / 2);
+    text(
+      "Wie viele Cluster sind sinnvoll?\nFür k = 1 … 8 wird k-Means je 10-mal\ngerechnet – die beste Fehlersumme zählt.",
+      p.x + p.w / 2,
+      p.y + KOPF_H + (p.h - KOPF_H) / 2
+    );
     return;
   }
-  const veraltet = ellbogen.normiert !== normiert || ellbogen.startwert !== startwert;
+  const veraltet = ellbogen.normiert !== normiert || ellbogen.startwert !== startwert || ellbogen.szenario !== szenario;
   zeichneLinienDiagramm(
     p,
     ellbogen.werte.map((q) => ({ x: q.k, y: q.sse })),
@@ -1374,7 +1454,7 @@ function zeichneTooltip() {
     return;
   }
   const b = daten[i];
-  let s = `Schuss ${b.id} · ${b.t} °C · ${b.p} bar`;
+  let s = `${SZ.wort.einzahl} ${b.id} · ${punktWerte(b)}`;
   if (b.cluster >= 0) {
     s += ` · Cluster C${b.cluster + 1}`;
   }
@@ -1436,7 +1516,7 @@ function mousePressed() {
   // 2. Startzentren per Klick
   if (phase === "leer") {
     if (startArt === "klick") {
-      zentren.push({ t: pkt.t, p: pkt.p });
+      zentren.push({ x: pkt.x, y: pkt.y });
       karteSchluessel = "";
       if (zentren.length >= k) {
         zentrenGesetzt();
@@ -1447,11 +1527,11 @@ function mousePressed() {
     return;
   }
 
-  // 3. neuen Schuss einordnen
+  // 3. neue Messung einordnen
   if (phase === "fertig") {
-    neuenSchussEinordnen(Math.round(pkt.t), Math.round(pkt.p / 5) * 5);
+    neuenPunktEinordnen(aufRaster(pkt.x, MERKMALE[0]), aufRaster(pkt.y, MERKMALE[1]));
   } else {
-    zeigeHinweis("Neue Schüsse lassen sich einordnen, sobald k-Means fertig ist.");
+    zeigeHinweis(`Neue ${SZ.wort.mehrzahl} lassen sich einordnen, sobald k-Means fertig ist.`);
   }
 }
 
@@ -1460,7 +1540,7 @@ function mouseDragged() {
     return;
   }
   const pkt = ausPlot(mausX(), mausY());
-  zentren[ziehen] = { t: pkt.t, p: pkt.p };
+  zentren[ziehen] = { x: pkt.x, y: pkt.y };
 }
 
 function mouseReleased() {
@@ -1503,15 +1583,18 @@ function keyPressed() {
 // Daten als CSV speichern (z. B. zur Weiterarbeit in Python oder Excel)
 // =============================================================================
 function csvSpeichern() {
-  const zeilen = ["schuss;massetemperatur_c;einspritzdruck_bar;cluster"];
+  const [m1, m2] = MERKMALE;
+  const zeilen = [`${SZ.wort.einzahl.toLowerCase()};${m1.csv};${m2.csv};cluster`];
   const sortiert = daten.slice().sort((a, b) => a.id - b.id);
   for (const b of sortiert) {
-    zeilen.push(`${b.id};${b.t};${b.p};${b.cluster >= 0 ? "C" + (b.cluster + 1) : ""}`);
+    zeilen.push(
+      `${b.id};${b.x.toFixed(m1.stellen)};${b.y.toFixed(m2.stellen)};${b.cluster >= 0 ? "C" + (b.cluster + 1) : ""}`
+    );
   }
   const blob = new Blob([zeilen.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "prozessdaten_maschine3.csv";
+  a.download = SZ.csvDatei;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

@@ -4,8 +4,7 @@ Unüberwachtes Lernen zum Zuschauen und Ausprobieren: Der k-Means-Algorithmus fi
 
 Erstellt für den Unterricht an der Jakob-Preh-Schule ([bsnes.de](https://www.bsnes.de)).
 
-**Live-Version:** [Hier direkt anschauen](https://flowthetensor.github.io/PW11-Unueberwachtes-Lernen-p5/)
-
+**Live-Version:** [Hier direkt anschauen](https://flowthetensor.github.io/PW11-Unueberwachtes-Lernen-P5/)
 ---
 
 ## Worum geht es?

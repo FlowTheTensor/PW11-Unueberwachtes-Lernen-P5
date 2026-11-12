@@ -12,7 +12,7 @@ Erstellt für den Unterricht an der Jakob-Preh-Schule ([bsnes.de](https://www.bs
 
 In der Produktion werden ständig Messwerte aufgezeichnet – aber fast nie steht dabei, *was* gerade los war. Diese Daten haben also **kein Label**. Anders als beim überwachten Lernen (z. B. PW9: i.O. / n.i.O.) gibt es keine „richtige Antwort“, aus der gelernt werden könnte. k-Means soll die Struktur allein aus den Messwerten finden: Welche Messpunkte gehören zusammen?
 
-Oben in der Auswahlliste **„Beispiel“** stehen drei Datensätze zur Verfügung. In jedem stecken vier versteckte Gruppen und ein paar Ausreißer. Der Algorithmus kennt die Tabellen unten nicht – mit „Wahre Zustände zeigen“ bzw. „Wahre Rezepturen zeigen“ lassen sich die Gruppen nachträglich einblenden, um das Ergebnis zu überprüfen.
+In der roten **Beispiel-Leiste** unter der Kopfzeile stehen drei Datensätze zur Verfügung. In jedem stecken vier versteckte Gruppen und ein paar Ausreißer. Der Algorithmus kennt die Tabellen unten nicht – mit „Wahre Zustände zeigen“ bzw. „Wahre Rezepturen zeigen“ lassen sich die Gruppen nachträglich einblenden, um das Ergebnis zu überprüfen.
 
 > Alle Werte sind simuliert und an eine typische 24-V-Modellanlage für Industrie 4.0 angelehnt. Sobald echte Messdaten der ETS-Anlage verfügbar sind, kann man sie mit realen Werten vergleichen.
 
@@ -126,7 +126,7 @@ Nach dem Konvergieren lässt sich per Klick eine neue Messung einordnen. Sie kom
 
 | Aktion | Wirkung |
 |---|---|
-| Auswahlliste „Beispiel“ | Förderband-Antrieb, Pneumatikzylinder oder Spritzgießmaschine |
+| Beispiel-Leiste (Reiter 1–3) | Förderband-Antrieb, Pneumatikzylinder oder Spritzgießmaschine |
 | **→** oder „Schritt“ | nächster Schritt: Startzentren · Zuordnen · Verschieben |
 | **Leertaste** oder „Automatisch“ | bis zum Ende durchlaufen lassen / anhalten |
 | **R** oder „Neu starten“ | neue Startzentren, gleiche Daten |
@@ -166,7 +166,7 @@ Nach dem Konvergieren lässt sich per Klick eine neue Messung einordnen. Sie kom
 | `assets/logo-jps.png` | Logo der Jakob-Preh-Schule |
 | `libraries/p5.min.js` | p5.js (lokal, damit die Seite auch offline läuft) |
 
-Ein weiteres Beispiel lässt sich ergänzen, indem man in `daten.js` einen Eintrag in `SZENARIEN` hinzufügt (zwei Merkmale, Gruppen mit Mittelwert und Streuung, Wörter für die Texte). Es erscheint dann automatisch in der Auswahlliste.
+Ein weiteres Beispiel lässt sich ergänzen, indem man in `daten.js` einen Eintrag in `SZENARIEN` hinzufügt (zwei Merkmale, Gruppen mit Mittelwert und Streuung, Wörter für die Texte). Es erscheint dann automatisch als weiterer Reiter in der Beispiel-Leiste.
 
 ## Lokal starten
 
